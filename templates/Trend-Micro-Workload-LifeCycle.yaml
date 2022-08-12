@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Deploy Trend Micro Cloud One Workload Security LifeCycle hook in Control Tower Master v1
+Description: Deploy Trend Micro Cloud One LifeCycle hook in Control Tower Master v1
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -9,28 +9,21 @@ Metadata:
         Parameters:
           - ApiKey
       - Label:
-          default: "Parameters for Deep Security Manager deployments. Leave defaults for Cloud One Workload Security"
+          default: "Parameters for Cloud One deployments. Leave defaults for Cloud One"
         Parameters:
           - ApiEndpoint
-          - DeepSecurityManagerAccount
 
 Parameters:
   ApiKey:
     Type: String
-    Description: API key for Cloud One-Workload Security (Using the Workload Security console) or Deep Security manager.
+    Description: API key for Cloud One.
     AllowedPattern : ".+"
     NoEcho: True
   ApiEndpoint:
     Type: String
-    Description: "Server FQDN: Port for Deep Security manager. Leave default for Cloud One Workload Security or change for your specific Cloud One region."
+    Description: "Cloud One endpoint, leave default"
     AllowedPattern: ".+"
-    Default: 'workload.us-1.cloudone.trendmicro.com'
-  DeepSecurityManagerAccount:
-    Type: String
-    Description: AWS account ID for the shared security accoung where Deep Security Manager is deployed. Leave default for Cloud One Workload Security
-    AllowedPattern: '^\d{12}$'
-    NoEcho: True
-    Default: 147995105371
+    Default: '74u3z7zmn1.execute-api.ca-central-1.amazonaws.com/dev-mvdpxx'
 
 Mappings:
   LifeCycleRelease:
@@ -59,7 +52,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: "s3:GetObject"
-                Resource: "arn:aws:s3:::trend-micro-cloud-one-workload-controltower-lifecycle*"
+                Resource: "arn:aws:s3:::trend-micro-cloud-one-controltower-lifecycle*"
               - Effect: Allow
                 Action:
                   - "s3:GetObject"
@@ -83,11 +76,11 @@ Resources:
     Properties:
       ServiceToken: !GetAtt 'CopyLambdaFunction.Arn'
       DestBucket: !Ref LambdaBucket
-      SourceBucket: trend-micro-cloud-one-workload-controltower-lifecycle
+      SourceBucket: trend-micro-cloud-one-controltower-lifecycle
       Nonce: !FindInMap [LifeCycleRelease, Release, Stamp]
       Prefix: ''
       Objects:
-        - c1w-controltower-lifecycle.zip
+        - c1-controltower-lifecycle.zip
   LifeCycleConfig:
     Type: Custom::CopyResource
     Properties:
@@ -131,7 +124,7 @@ Resources:
               logger.info(f'Response from update_function_call is: {response}')
 
           def handler(event, context):
-              logger.info(f"Event received by handler: {event}")
+              logging.info(f"Event received by handler: {event}")
               status = cfnresponse.SUCCESS
               try:
                   if event['RequestType'] == 'Delete':
@@ -153,7 +146,7 @@ Resources:
 
 
 
-  TrendMicroCloudOneWorkloadApiLambdaExecutionRole:
+  TrendMicroCloudOneApiLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -166,7 +159,7 @@ Resources:
             Action:
               - sts:AssumeRole
       Policies:
-        - PolicyName: TMCloudOneWorkloadApiLambdaPolicy
+        - PolicyName: TMCloudOneApiLambdaPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -206,30 +199,33 @@ Resources:
                   - "iam:DeletePolicyVersion"
                   - "iam:SetDefaultPolicyVersion"
                   - "iam:UpdateAssumeRolePolicy"
+                  - "iam:CreateOpenIDConnectProvider"
+                  - "iam:DeleteOpenIDConnectProvider"
+                  - "iam:GetOpenIDConnectProvider"
                 Resource:
-                  - "arn:aws:iam::*:role/CloudOneWorkloadConnectorRole"
-                  - "arn:aws:iam::*:policy/CloudOneWorkloadConnectorPolicy*"
+                  - "arn:aws:iam::*:role/CloudOneIntegrationRole"
+                  - "arn:aws:iam::*:policy/CloudOneIntegrationPolicy*"
+                  - "arn:aws:iam::*:oidc-provider/*" # TODO this should be more locked down
   ConnectorApiLambdaFunction:
     DependsOn: CopyLambda
     Type: AWS::Lambda::Function
     Properties:
-      Description: Configures Workload Security Connector for new Control Tower accounts
+      Description: Configures Cloud One Connector for new Control Tower accounts
       Environment:
         Variables:
           ApiEndpoint: !Ref ApiEndpoint
-          AccountIdForRole: !Ref DeepSecurityManagerAccount
       Code:
         S3Bucket: !Ref LambdaBucket
-        S3Key: c1w-controltower-lifecycle.zip
+        S3Key: c1-controltower-lifecycle.zip
       Handler: c1w-controltower-lifecycle.lambda_handler
       Runtime: python3.7
-      Role: !GetAtt TrendMicroCloudOneWorkloadApiLambdaExecutionRole.Arn
+      Role: !GetAtt TrendMicroCloudOneApiLambdaExecutionRole.Arn
       MemorySize: 128
       Timeout: 120
   ApiKeySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: 'TrendMicro/CloudOne/WorkloadApiKey'
+      Name: '/TrendMicro/CloudOneApiKey'
       SecretString: !Sub |
         {
           "ApiKey": "${ApiKey}"
@@ -240,8 +236,8 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt ConnectorApiLambdaFunction.Arn
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt EventRuleTrendMicroWorkloadLambdaTrigger.Arn
-  EventRuleTrendMicroWorkloadLambdaTrigger:
+      SourceArn: !GetAtt EventRuleTrendMicroLambdaTrigger.Arn
+  EventRuleTrendMicroLambdaTrigger:
     DependsOn:
     - ConnectorApiLambdaFunction
     Type: AWS::Events::Rule
@@ -258,8 +254,8 @@ Resources:
         - AWS Service Event via CloudTrail
         source:
         - aws.controltower
-      Name: C1WorkloadCaptureControlTowerLifeCycleEvents
+      Name: C1CaptureControlTowerLifeCycleEvents
       State: ENABLED
       Targets:
       - Arn: !GetAtt "ConnectorApiLambdaFunction.Arn"
-        Id: IDEventRuleTrendMicroWorkloadLambdaTrigger
+        Id: IDEventRuleTrendMicroLambdaTrigger
